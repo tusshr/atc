@@ -7,11 +7,13 @@ function nextDockerfile(ctx: Context): string {
   const bun = ctx.pm === "bun";
   const builder = bun ? BUN_IMAGE : NODE_IMAGE;
   const install = bun
-    ? "COPY package.json bun.lock* ./\nRUN bun install --frozen-lockfile --ignore-scripts"
-    : "COPY package.json package-lock.json ./\nRUN npm ci --ignore-scripts --no-audit --no-fund";
+    ? "COPY package.json bun.lock* ./\nRUN bun install --frozen-lockfile"
+    : "COPY package.json package-lock.json ./\nRUN npm ci --no-audit --no-fund";
   return `# syntax=docker/dockerfile:1
 FROM ${builder} AS deps
 WORKDIR /app
+# Skip git hooks; dependency install scripts (native modules) still run
+ENV HUSKY=0
 ${install}
 
 FROM ${builder} AS builder
@@ -19,7 +21,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN ${bun ? "bun run build" : "npm run build"}
+# public/ is optional in Next.js but the runner stage copies it
+RUN mkdir -p public && ${bun ? "bun run build" : "npm run build"}
 
 # Next.js standalone output runs on Node
 FROM ${NODE_IMAGE} AS runner
@@ -43,10 +46,11 @@ function serverDockerfile(ctx: Context): string {
     return `# syntax=docker/dockerfile:1
 FROM ${BUN_IMAGE} AS build
 WORKDIR /app
+ENV HUSKY=0
 COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN bun install --frozen-lockfile
 COPY . .
-${hasBuild ? "RUN bun run build\n" : ""}RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
+${hasBuild ? "RUN bun run build\n" : ""}RUN rm -rf node_modules && bun install --frozen-lockfile --production
 
 FROM ${BUN_IMAGE} AS runner
 WORKDIR /app
@@ -60,8 +64,9 @@ CMD ["bun", "run", "start"]
   return `# syntax=docker/dockerfile:1
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
+ENV HUSKY=0
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY . .
 ${hasBuild ? "RUN npm run build\n" : ""}RUN npm prune --omit=dev
 
@@ -100,8 +105,12 @@ export const docker: Tool = {
     if (ctx.framework === "next") {
       const path = NEXT_CONFIGS.find((p) => ctx.read(p) !== undefined);
       const src = path ? ctx.read(path) : undefined;
-      if (path && src && /\boutput\s*:/.test(src)) {
-        // already configured; leave it to the user
+      if (path && src && /\boutput\s*:\s*["']standalone["']/.test(src)) {
+        // already configured
+      } else if (path && src && /\boutput\s*:/.test(src)) {
+        notes.push(
+          `${path} sets a different output mode. The Dockerfile needs output: "standalone"; change it or delete the Dockerfile.`,
+        );
       } else if (path && src && CONFIG_OPEN.test(src)) {
         files[path] = src.replace(CONFIG_OPEN, `$1\n  output: "standalone",`);
       } else {

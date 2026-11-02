@@ -214,9 +214,18 @@ export function wrap(items: string[], max: number, sep = " · "): string[] {
   return lines;
 }
 
-export function flightPlan(plan: Plan, exists: (path: string) => boolean): void {
-  const files = [...plan.files.keys()];
-  const scripts = Object.keys(plan.scripts);
+export function flightPlan(
+  plan: Plan,
+  exists: (path: string) => boolean,
+  existingScripts: Readonly<Record<string, string>>,
+): void {
+  const files = [
+    ...[...plan.files.keys()].map((f) => [exists(f) ? "~" : "+", f] as const),
+    ...plan.remove.map((f) => ["-", f] as const),
+  ];
+  const scripts = Object.keys(plan.scripts).map((name) =>
+    existingScripts[name] === undefined ? name : `${name} (extended)`,
+  );
   const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   write();
   write(
@@ -229,13 +238,13 @@ export function flightPlan(plan: Plan, exists: (path: string) => boolean): void 
   const blank = " ".repeat(gutter);
   const room = Math.max(30, Math.min(width(), 100) - gutter - 2);
 
-  const mark = (f: string) => (exists(f) ? c.amber("~") : c.green("+"));
-  const col = Math.max(...files.map((f) => f.length), 0) + 4;
+  const MARKS = { "+": c.green("+"), "~": c.amber("~"), "-": c.red("-") };
+  const col = Math.max(...files.map(([, f]) => f.length), 0) + 4;
   const perRow = col * 2 <= room ? 2 : 1;
   for (let i = 0; i < files.length; i += perRow) {
     const row = files
       .slice(i, i + perRow)
-      .map((f) => `${mark(f)} ${f.padEnd(col - 2)}`)
+      .map(([m, f]) => `${MARKS[m]} ${f.padEnd(col - 2)}`)
       .join("");
     write(`${i === 0 ? label("files") : blank}${row.trimEnd()}`);
   }
@@ -248,10 +257,18 @@ export function flightPlan(plan: Plan, exists: (path: string) => boolean): void 
       write(`${i === 0 ? label(name) : blank}${line}`);
     }
   }
+  for (const [i, note] of plan.notes.entries()) {
+    write(`${i === 0 ? label("notes") : blank}${c.amber("!")} ${note}`);
+  }
   write();
-  write(
-    `${blank}${c.green("+")} ${c.dim("new")}   ${c.amber("~")} ${c.dim("replaces an existing file")}`,
-  );
+  const legend = [
+    `${MARKS["+"]} ${c.dim("new")}`,
+    `${MARKS["~"]} ${c.dim("replaces an existing file")}`,
+    ...(plan.remove.length
+      ? [`${MARKS["-"]} ${c.dim("removed: it would override the new config")}`]
+      : []),
+  ];
+  write(`${blank}${legend.join("   ")}`);
   write();
 }
 
@@ -287,11 +304,20 @@ export async function task(
   const draw = () =>
     out.write(`\r\x1b[2K   ${c.amber(FRAMES[frame++ % FRAMES.length] ?? "")} ${c.white(label)}`);
   const timer = live ? setInterval(draw, 80) : undefined;
+  // Ctrl+C while a step runs: restore the cursor before exiting (the child gets SIGINT too).
+  const interrupted = () => {
+    if (timer) clearInterval(timer);
+    out.write("\r\x1b[2K\x1b[?25h");
+    write(`   ${c.red("✗")} ${c.white(label)} ${c.dim("interrupted")}`);
+    process.exit(130);
+  };
+  process.once("SIGINT", interrupted);
   if (live) {
     out.write("\x1b[?25l");
     draw();
   }
   const finish = (icon: string, status: string) => {
+    process.off("SIGINT", interrupted);
     if (timer) clearInterval(timer);
     if (live) out.write("\r\x1b[2K\x1b[?25h");
     write(`   ${icon} ${leader(label, c.dim(status.padStart(6)), CHECK_WIDTH)}`);

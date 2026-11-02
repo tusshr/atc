@@ -1,5 +1,26 @@
 import { json, type Tool } from "../plan.ts";
 
+/** Config files Prettier would read instead of .prettierrc.json. */
+const OTHER_CONFIGS = [
+  ".prettierrc",
+  ".prettierrc.yaml",
+  ".prettierrc.yml",
+  ".prettierrc.json5",
+  ".prettierrc.js",
+  ".prettierrc.cjs",
+  ".prettierrc.mjs",
+  ".prettierrc.ts",
+  ".prettierrc.cts",
+  ".prettierrc.mts",
+  ".prettierrc.toml",
+  "prettier.config.js",
+  "prettier.config.cjs",
+  "prettier.config.mjs",
+  "prettier.config.ts",
+  "prettier.config.cts",
+  "prettier.config.mts",
+];
+
 export const prettier: Tool = {
   id: "prettier",
   enabled: (ctx) => ctx.linter === "eslint",
@@ -37,8 +58,14 @@ export const prettier: Tool = {
       "pnpm-lock.yaml",
       ...(framework === "next" ? ["next-env.d.ts"] : []),
     ];
+    const pkg = JSON.parse(ctx.read("package.json") ?? "{}") as { prettier?: unknown };
     return {
       files: { ".prettierrc.json": json(config), ".prettierignore": `${ignore.join("\n")}\n` },
+      remove: OTHER_CONFIGS.filter((f) => ctx.read(f) !== undefined),
+      notes:
+        pkg.prettier === undefined
+          ? []
+          : [`package.json has a "prettier" key, which overrides .prettierrc.json. Remove it.`],
       devDependencies: ["prettier", ...plugins],
       scripts: { format: "prettier --write .", "format:check": "prettier --check ." },
     };

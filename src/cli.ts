@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-import { exec } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { exec, execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { detectProject, readPackageJson } from "./detect.ts";
 import {
   type Answers,
+  biomeBlocker,
   buildPlan,
   CASINGS,
   type Casing,
@@ -14,7 +15,7 @@ import {
   dockerSupported,
   EXTRAS,
   type Extra,
-  eslintSupported,
+  eslintBlocker,
   FRAMEWORKS,
   type Framework,
   hooksSupported,
@@ -58,6 +59,22 @@ async function run(cmd: string, cwd: string): Promise<void> {
     const e = error as { stdout?: string; stderr?: string };
     throw new ui.TaskError(`Command failed: ${cmd}`, `${e.stdout ?? ""}${e.stderr ?? ""}`);
   }
+}
+
+/** Resolves if `bin --version` runs; rejects with a clear message otherwise. */
+function available(bin: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(bin, ["--version"], { shell: process.platform === "win32" }, (error) =>
+      error
+        ? reject(
+            new ui.TaskError(
+              `${bin} isn't installed or isn't on your PATH. Nothing was changed.`,
+              "",
+            ),
+          )
+        : resolve(),
+    );
+  });
 }
 
 function oneOf<T extends string>(
@@ -119,11 +136,12 @@ async function ask(
     { display: (v) => `${v} · ${runtime(v)}` },
   );
 
-  const canEslint = eslintSupported(project);
-  if (preset.linter === "eslint" && !canEslint) {
-    ui.fail(
-      `ESLint can't be used with TypeScript ${project.tsMajor} yet (typescript-eslint supports up to 6). Use --linter biome.`,
-    );
+  const blocked: Partial<Record<Linter, string>> = {
+    eslint: eslintBlocker(project),
+    biome: biomeBlocker(project),
+  };
+  if (preset.linter && blocked[preset.linter]) {
+    ui.fail(`--linter ${preset.linter} isn't available here: it ${blocked[preset.linter]}.`);
   }
   const linter = await pick<Linter>(
     "Linter & formatter",
@@ -131,15 +149,18 @@ async function ask(
       {
         value: "eslint",
         label: LINTERS.eslint,
-        hint: canEslint
-          ? "most plugins, framework rules"
-          : `needs TypeScript ≤ 6 (found ${project.tsMajor})`,
-        disabled: !canEslint,
+        hint: blocked.eslint ?? "most plugins, framework rules",
+        disabled: Boolean(blocked.eslint),
       },
-      { value: "biome", label: LINTERS.biome, hint: "one fast tool for both" },
+      {
+        value: "biome",
+        label: LINTERS.biome,
+        hint: blocked.biome ?? "one fast tool for both",
+        disabled: Boolean(blocked.biome),
+      },
       { value: "none", label: LINTERS.none, hint: "skip linting and formatting" },
     ],
-    canEslint ? "eslint" : "biome",
+    !blocked.eslint ? "eslint" : !blocked.biome ? "biome" : "none",
     "column",
     preset.linter,
   );
@@ -236,19 +257,26 @@ async function main(): Promise<void> {
   const plan = buildPlan(ctx, TOOLS);
   const exists = (path: string) => existsSync(join(cwd, path));
 
-  ui.flightPlan(plan, exists);
+  ui.flightPlan(plan, exists, project.scripts);
   if (!yes && !(await ui.confirm("Proceed with this plan?"))) {
     process.stdout.write(`\n ${ui.c.dim("Nothing changed.")}\n\n`);
     return;
   }
 
   const started = performance.now();
-  const usesHusky = plan.devDependencies.includes("husky") || plan.scripts.prepare === "husky";
+  const usesHusky = plan.files.has(".husky/pre-commit") || plan.files.has(".husky/commit-msg");
   const warnings: string[] = [...plan.notes];
   ui.section("CHECKLIST");
 
   try {
+    // Before touching anything: make sure the commands we'll need exist.
+    const needed = [answers.pm, ...(usesHusky ? ["git"] : [])];
+    await ui.task(
+      `Check ${needed.join(" and ")} ${needed.length > 1 ? "are" : "is"} installed`,
+      () => Promise.all(needed.map((bin) => available(bin))),
+    );
     await ui.task(`Write ${plan.files.size} config files`, async () => {
+      for (const path of plan.remove) rmSync(join(cwd, path), { force: true });
       for (const [path, content] of plan.files) {
         mkdirSync(dirname(join(cwd, path)), { recursive: true });
         writeFileSync(join(cwd, path), content);

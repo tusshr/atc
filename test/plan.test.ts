@@ -3,10 +3,11 @@ import { test } from "node:test";
 
 import {
   type Answers,
+  biomeBlocker,
   buildPlan,
   createContext,
   type Extra,
-  eslintSupported,
+  eslintBlocker,
   hooksSupported,
   type Project,
 } from "../src/plan.ts";
@@ -22,6 +23,7 @@ function project(over: Partial<Project> = {}): Project {
     frameworkMajor: undefined,
     pm: "npm",
     deps: new Set(),
+    versions: {},
     scripts: {},
     typescript: true,
     tsMajor: 6,
@@ -98,7 +100,7 @@ test("commit check alone installs husky without lint-staged", () => {
   assert.ok(p.files.has(".husky/commit-msg"));
   assert.ok(!p.files.has(".husky/pre-commit"));
   assert.deepEqual(p.devDependencies, ["husky"]);
-  assert.equal(p.scripts.prepare, "husky");
+  assert.equal(p.scripts.prepare, "husky || true");
 });
 
 test("pre-commit hook uses the package manager's runner", () => {
@@ -124,6 +126,21 @@ test("docker: patches next.config with standalone output, once", () => {
   assert.ok(!again.files.has("next.config.ts"), "already configured configs are left alone");
 });
 
+test("docker: dependency install scripts run; optional public/ is created", () => {
+  const server = plan(project({ scripts: { start: "node ." } })).files.get("Dockerfile") ?? "";
+  assert.doesNotMatch(server, /--ignore-scripts/);
+  assert.match(server, /ENV HUSKY=0/);
+  const next = plan(project({ framework: "next" })).files.get("Dockerfile") ?? "";
+  assert.match(next, /mkdir -p public/);
+});
+
+test("docker: a different next output mode is reported, not overwritten", () => {
+  const src = `const nextConfig = {\n  output: "export",\n};\n`;
+  const p = plan(project({ framework: "next" }), {}, { "next.config.ts": src });
+  assert.ok(!p.files.has("next.config.ts"));
+  assert.ok(p.notes.some((n) => n.includes("output mode")));
+});
+
 test("docker: warns when a server project has no start script", () => {
   const p = plan(project({ framework: "express" }));
   assert.ok(p.notes.some((n) => n.includes("start")));
@@ -134,10 +151,70 @@ test("gitignore is only written when missing", () => {
   assert.ok(!plan(project(), {}, { ".gitignore": "node_modules\n" }).files.has(".gitignore"));
 });
 
-test("eslint is unavailable on TypeScript 7", () => {
-  assert.equal(eslintSupported(project({ tsMajor: 7 })), false);
-  assert.equal(eslintSupported(project({ tsMajor: 6 })), true);
-  assert.equal(eslintSupported(project({ typescript: false, tsMajor: 7 })), true);
+test("eslint is blocked on TypeScript 7, ESLint 8 and Prettier 2; biome on Biome 1", () => {
+  assert.match(eslintBlocker(project({ tsMajor: 7 })) ?? "", /TypeScript/);
+  assert.equal(eslintBlocker(project({ tsMajor: 6 })), undefined);
+  assert.equal(eslintBlocker(project({ typescript: false, tsMajor: 7 })), undefined);
+  assert.match(eslintBlocker(project({ versions: { eslint: "^8.57.1" } })) ?? "", /eslint 9/);
+  assert.match(eslintBlocker(project({ versions: { prettier: "2.8.8" } })) ?? "", /prettier 3/);
+  assert.match(biomeBlocker(project({ versions: { "@biomejs/biome": "1.9.4" } })) ?? "", /2\+/);
+  assert.equal(biomeBlocker(project({ versions: { "@biomejs/biome": "^2.6.0" } })), undefined);
+});
+
+test("existing scripts are kept, never replaced; prepare is extended", () => {
+  const p = plan(
+    project({
+      scripts: { lint: "my-lint", prepare: "npm run codegen", release: "commit-and-tag-version" },
+    }),
+  );
+  assert.equal(p.scripts.lint, undefined, "user's lint script is kept");
+  assert.ok(p.notes.some((n) => n.includes(`"lint"`)));
+  assert.equal(p.scripts.release, undefined, "identical script is not rewritten");
+  assert.ok(!p.notes.some((n) => n.includes(`"release"`)));
+  assert.equal(p.scripts.prepare, "npm run codegen && (husky || true)");
+  const again = plan(project({ scripts: { prepare: "husky" } }));
+  assert.equal(again.scripts.prepare, undefined, "prepare that already runs husky is left alone");
+});
+
+test("prepare tolerates production installs without husky", () => {
+  assert.equal(plan(project()).scripts.prepare, "husky || true");
+});
+
+test("configs that would shadow the generated ones are removed", () => {
+  const p = plan(
+    project(),
+    {},
+    { "eslint.config.js": "", ".prettierrc": "", "package.json": `{"prettier":{}}` },
+  );
+  assert.deepEqual(p.remove.sort(), [".prettierrc", "eslint.config.js"]);
+  assert.ok(p.notes.some((n) => n.includes(`"prettier" key`)));
+  const b = plan(project(), { linter: "biome" }, { "biome.jsonc": "{}" });
+  assert.deepEqual(b.remove, ["biome.jsonc"]);
+});
+
+test("route folders are exempt from file naming; Next folder rule matches files", () => {
+  const next = plan(project({ framework: "next" })).files.get("eslint.config.mjs") ?? "";
+  assert.match(next, /"pages\/\*\*"/);
+  assert.match(next, /"\{app,src\/app\}\/\*\*\/\*\.\{ts,tsx,js,jsx\}"/);
+  const astro = plan(project({ framework: "astro" })).files.get("eslint.config.mjs") ?? "";
+  assert.match(astro, /"src\/pages\/\*\*"/);
+});
+
+test("bun projects get Bun globals", () => {
+  const config = plan(project({ pm: "bun" })).files.get("eslint.config.mjs") ?? "";
+  assert.match(config, /globals\.bunBuiltin/);
+});
+
+test("astro + biome enables template support", () => {
+  const biome = JSON.parse(
+    plan(project({ framework: "astro" }), { linter: "biome" }).files.get("biome.json") ?? "{}",
+  );
+  assert.equal(biome.html.experimentalFullSupportEnabled, true);
+  assert.equal(biome.linter.domains.astro, "recommended");
+});
+
+test("npm runs local binaries with -- so their flags aren't eaten by npx", () => {
+  assert.equal(plan(project()).files.get(".husky/pre-commit"), "npx --no -- lint-staged\n");
 });
 
 test("git hooks only at the repository root", () => {

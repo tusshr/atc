@@ -5,7 +5,8 @@ import { json, type Tool } from "../plan.ts";
 const commitMsgHook = () =>
   readFileSync(new URL("../../templates/commit-msg", import.meta.url), "utf8");
 
-const husky = { devDependencies: ["husky"], scripts: { prepare: "husky" } };
+// `|| true` keeps production installs (npm ci --omit=dev) working when husky isn't installed.
+const husky = { devDependencies: ["husky"], scripts: { prepare: "husky || true" } };
 
 /** Lint and format staged files before every commit. */
 export const preCommit: Tool = {

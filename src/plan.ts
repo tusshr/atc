@@ -35,6 +35,8 @@ export interface Project {
   frameworkMajor: number | undefined;
   pm: PackageManager;
   deps: ReadonlySet<string>;
+  /** Declared version ranges of all dependencies, e.g. { eslint: "^9.1.0" }. */
+  versions: Readonly<Record<string, string>>;
   scripts: Readonly<Record<string, string>>;
   typescript: boolean;
   tsMajor: number | undefined;
@@ -66,6 +68,8 @@ export interface Contribution {
   files?: Record<string, string>;
   devDependencies?: string[];
   scripts?: Record<string, string>;
+  /** Files to delete because they would shadow a generated config. */
+  remove?: string[];
   notes?: string[];
 }
 
@@ -77,7 +81,9 @@ export interface Tool {
 
 export interface Plan {
   files: Map<string, string>;
+  remove: string[];
   devDependencies: string[];
+  /** Only scripts that are new or composed; existing scripts are never replaced. */
   scripts: Record<string, string>;
   notes: string[];
 }
@@ -91,15 +97,34 @@ export const OUT_DIRS: Record<Framework, readonly string[]> = {
 };
 
 export const EXEC: Record<PackageManager, string> = {
-  npm: "npx --no",
+  npm: "npx --no --",
   pnpm: "pnpm exec",
   yarn: "yarn",
   bun: "bunx",
 };
 
-/** typescript-eslint supports TypeScript up to 6.x; TS 7 has no JS compiler API yet. */
-export const eslintSupported = (p: Project): boolean =>
-  !p.typescript || p.tsMajor === undefined || p.tsMajor < 7;
+/** "^16.4.3" → 16, "~4" → 4, "latest" → undefined */
+export const major = (range: string | undefined): number | undefined => {
+  const m = range?.match(/\d+/)?.[0];
+  return m === undefined ? undefined : Number(m);
+};
+
+const tooOld = (p: Project, dep: string, min: number): string | undefined => {
+  const v = major(p.versions[dep]);
+  return v !== undefined && v < min ? `needs ${dep} ${min}+ (found ${v})` : undefined;
+};
+
+/** Why ESLint + Prettier can't be offered, or undefined if it can. */
+export function eslintBlocker(p: Project): string | undefined {
+  // typescript-eslint supports TypeScript up to 6.x; TS 7 has no JS compiler API yet.
+  if (p.typescript && p.tsMajor !== undefined && p.tsMajor >= 7) {
+    return `needs TypeScript ≤ 6 (found ${p.tsMajor})`;
+  }
+  return tooOld(p, "eslint", 9) ?? tooOld(p, "prettier", 3);
+}
+
+/** Why Biome can't be offered, or undefined if it can. */
+export const biomeBlocker = (p: Project): string | undefined => tooOld(p, "@biomejs/biome", 2);
 
 /** Husky installs hooks at the repo root; we only support running atc there (or outside git). */
 export const hooksSupported = (p: Project, cwd: string): boolean =>
@@ -119,16 +144,33 @@ export function createContext(project: Project, answers: Answers, read: Context[
 }
 
 export function buildPlan(ctx: Context, tools: readonly Tool[]): Plan {
-  const plan: Plan = { files: new Map(), devDependencies: [], scripts: {}, notes: [] };
+  const plan: Plan = { files: new Map(), remove: [], devDependencies: [], scripts: {}, notes: [] };
   for (const tool of tools) {
     if (!tool.enabled(ctx)) continue;
     const c = tool.apply(ctx);
     for (const [path, content] of Object.entries(c.files ?? {})) plan.files.set(path, content);
+    plan.remove.push(...(c.remove ?? []));
     plan.devDependencies.push(...(c.devDependencies ?? []));
     Object.assign(plan.scripts, c.scripts);
     plan.notes.push(...(c.notes ?? []));
   }
+  plan.remove = [...new Set(plan.remove)].filter((f) => !plan.files.has(f));
   plan.devDependencies = [...new Set(plan.devDependencies)].filter((d) => !ctx.project.deps.has(d));
+
+  // Never replace a script the user already has. `prepare` is composed instead,
+  // because other tools (codegen, builds) rely on it too.
+  for (const [name, value] of Object.entries(plan.scripts)) {
+    const existing = ctx.project.scripts[name];
+    if (existing === undefined) continue;
+    if (existing === value || (name === "prepare" && /\bhusky\b/.test(existing))) {
+      delete plan.scripts[name];
+    } else if (name === "prepare") {
+      plan.scripts[name] = `${existing} && (${value})`;
+    } else {
+      delete plan.scripts[name];
+      plan.notes.push(`Kept your existing "${name}" script. atc would have used: ${value}`);
+    }
+  }
   return plan;
 }
 
