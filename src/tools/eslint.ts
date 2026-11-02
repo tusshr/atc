@@ -10,9 +10,25 @@ const CHECK_FILE_CASE: Record<Casing, string> = {
 /** Folders whose file names follow the chosen casing. Root config files are left alone. */
 export const SOURCE_DIRS = ["src", "app", "components", "lib", "hooks", "utils"];
 
-/** Next.js dictates file names inside the app router (page.tsx, not-found.tsx, …). */
-export const nextRouterDirs = (ctx: Context): string[] =>
-  ctx.framework === "next" && ctx.casing !== "kebab" ? ["app/**", "src/app/**"] : [];
+/**
+ * Route folders where the framework dictates file names (page.tsx, not-found.tsx,
+ * [slug].tsx, [...path].astro). File naming rules skip them.
+ */
+export const routeDirs = (ctx: Context): string[] =>
+  ctx.framework === "next"
+    ? ["app/**", "src/app/**", "pages/**", "src/pages/**"]
+    : ctx.framework === "astro"
+      ? ["src/pages/**"]
+      : [];
+
+/** Flat configs ESLint would load instead of eslint.config.mjs. */
+const SHADOWING_CONFIGS = [
+  "eslint.config.js",
+  "eslint.config.cjs",
+  "eslint.config.ts",
+  "eslint.config.mts",
+  "eslint.config.cts",
+];
 
 export const eslint: Tool = {
   id: "eslint",
@@ -51,7 +67,13 @@ export const eslint: Tool = {
         devDependencies.push("eslint-plugin-astro");
         if (ts) devDependencies.push("@typescript-eslint/parser");
       }
-      const env = framework === "astro" ? "...globals.node, ...globals.browser" : "...globals.node";
+      const env = [
+        "...globals.node",
+        framework === "astro" && "...globals.browser",
+        ctx.pm === "bun" && "...globals.bunBuiltin",
+      ]
+        .filter(Boolean)
+        .join(", ");
       configs.push(`{ languageOptions: { globals: { ${env} } } }`);
     }
     configs.push("prettier");
@@ -75,7 +97,7 @@ export const eslint: Tool = {
     const exts = framework === "astro" ? "ts,tsx,js,jsx,astro" : "ts,tsx,js,jsx";
     configs.push(`{
     files: ${JSON.stringify(SOURCE_DIRS.map((d) => `${d}/**/*.{${exts}}`))},
-    ignores: ${JSON.stringify(nextRouterDirs(ctx))},
+    ignores: ${JSON.stringify(routeDirs(ctx))},
     plugins: { "check-file": checkFile },
     rules: {
       "check-file/filename-naming-convention": [
@@ -87,7 +109,7 @@ export const eslint: Tool = {
   }`);
     if (framework === "next") {
       configs.push(`{
-    files: ["{app,src/app}/**/"],
+    files: ["{app,src/app}/**/*.{ts,tsx,js,jsx}"],
     plugins: { "check-file": checkFile },
     rules: {
       "check-file/folder-naming-convention": ["error", { "{app,src/app}/**/": "NEXT_JS_APP_ROUTER_CASE" }],
@@ -99,6 +121,7 @@ export const eslint: Tool = {
       files: {
         "eslint.config.mjs": `${imports.join("\n")}\n\nexport default defineConfig([\n  ${configs.join(",\n  ")},\n]);\n`,
       },
+      remove: SHADOWING_CONFIGS.filter((f) => ctx.read(f) !== undefined),
       devDependencies,
       scripts: { lint: "eslint .", "lint:fix": "eslint . --fix" },
     };

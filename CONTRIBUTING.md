@@ -95,4 +95,5 @@ While atc is on 0.x, breaking changes bump the minor version and features bump t
 ### One-time npm setup (maintainers)
 
 1. Add an `NPM_TOKEN` repository secret (an npm granular token with publish access) for the first release.
-2. After the first publish, open the package settings on npmjs.com, add this repository as a trusted publisher with the `release.yml` workflow, then delete the `NPM_TOKEN` secret.
+2. After the first publish, open the package settings on npmjs.com and add this repository as a trusted publisher with the `release.yml` workflow. Make sure it's allowed to publish directly (the workflow runs `npm publish`), not only staged publishes.
+3. Merge one release with trusted publishing working, then delete the `NPM_TOKEN` secret.

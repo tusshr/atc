@@ -1,5 +1,5 @@
 import { type Casing, json, type Tool } from "../plan.ts";
-import { nextRouterDirs, SOURCE_DIRS } from "./eslint.ts";
+import { routeDirs, SOURCE_DIRS } from "./eslint.ts";
 
 const BIOME_CASE: Record<Casing, string> = {
   kebab: "kebab-case",
@@ -26,8 +26,10 @@ export const biome: Tool = {
   enabled: (ctx) => ctx.linter === "biome",
   apply(ctx) {
     const domains: Record<string, string> = {};
-    if (ctx.framework === "next")
+    if (ctx.framework === "next") {
       Object.assign(domains, { next: "recommended", react: "recommended" });
+    }
+    if (ctx.framework === "astro") domains.astro = "recommended";
 
     const config = {
       $schema: "./node_modules/@biomejs/biome/configuration_schema.json",
@@ -35,6 +37,8 @@ export const biome: Tool = {
       formatter: { indentStyle: "space" },
       javascript: { formatter: { quoteStyle: "double", trailingCommas: "es5" } },
       ...(ctx.project.tailwind && { css: { parser: { tailwindDirectives: true } } }),
+      // Lets Biome see components used in .astro templates, so they aren't flagged as unused.
+      ...(ctx.framework === "astro" && { html: { experimentalFullSupportEnabled: true } }),
       linter: {
         rules: { preset: "recommended" },
         ...(Object.keys(domains).length && { domains }),
@@ -44,13 +48,14 @@ export const biome: Tool = {
       },
       overrides: [
         { includes: SOURCE_DIRS.map((d) => `${d}/**`), ...filenameRule("error", ctx.casing) },
-        ...(nextRouterDirs(ctx).length
-          ? [{ includes: nextRouterDirs(ctx), ...filenameRule("off", ctx.casing) }]
+        ...(routeDirs(ctx).length
+          ? [{ includes: routeDirs(ctx), ...filenameRule("off", ctx.casing) }]
           : []),
       ],
     };
     return {
       files: { "biome.json": json(config) },
+      remove: ctx.read("biome.jsonc") === undefined ? [] : ["biome.jsonc"],
       devDependencies: ["@biomejs/biome"],
       scripts: {
         lint: "biome check .",
