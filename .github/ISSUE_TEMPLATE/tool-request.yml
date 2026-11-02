@@ -1,0 +1,18 @@
+name: New tool or framework
+description: Suggest a tool, framework or option atc should support
+labels: [enhancement]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Tool or framework
+      placeholder: "e.g. Vitest, SvelteKit, oxlint"
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why should atc set it up?
+      description: How you set it up by hand today, and which files or packages it needs.
+    validations:
+      required: true

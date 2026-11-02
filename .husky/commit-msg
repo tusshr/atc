@@ -1,0 +1,41 @@
+# Read commit message
+msg="$(head -n1 "$1")"
+
+# Define commit standards
+types="feat|fix|refactor|perf|style|test|docs|build|ops|chore|revert|ci"
+max_length=100
+max_scope_length=20
+
+# Define regex patterns
+conventional_pattern="^(${types})(\([a-zA-Z0-9_-]{1,${max_scope_length}}\))?!?: [[:print:]]{1,${max_length}}$"
+merge_pattern='^(Merge (branch '\''[^'\'']+'\''|pull request #[0-9]+)|Merge: [0-9a-f]{7,40})'
+revert_pattern='^Revert ".+"$'
+
+# Check patterns
+if echo "$msg" | grep -Eq "$conventional_pattern" || \
+   echo "$msg" | grep -Eq "$merge_pattern" || \
+   echo "$msg" | grep -Eq "$revert_pattern"; then
+    exit 0
+fi
+
+# Error message
+cat << EOF >&2
+❌ ERROR: Invalid commit message format.
+Commit messages must follow this format:
+  <type>(<scope>): <description>
+Where:
+  <type>: One of [${types}]
+  <scope>: Optional, max ${max_scope_length} characters, e.g., 'ui', 'api', 'core'
+  <description>: Required, max ${max_length} characters, e.g., 'add user authentication'
+Examples:
+  ✅ feat(ui): add new button component
+  ✅ fix: resolve API timeout issue
+  ✅ feat!: drop Node 18 support (breaking change)
+  ✅ chore(deps): update dependencies
+  ✅ revert: "feat: feature to revert"
+Merge commits are allowed, e.g.:
+  ✅ Merge branch 'feature-branch'
+  ✅ Merge pull request #123
+EOF
+
+exit 1
