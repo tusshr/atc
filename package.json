@@ -1,0 +1,65 @@
+{
+  "name": "@tusshr/atc",
+  "version": "0.0.0",
+  "description": "Interactive setup for linting, formatting, git hooks, conventional commits, releases and Docker in any Node project.",
+  "keywords": [
+    "cli",
+    "eslint",
+    "biome",
+    "prettier",
+    "husky",
+    "lint-staged",
+    "conventional-commits",
+    "nextjs",
+    "astro",
+    "hono",
+    "express",
+    "setup"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Tushar",
+    "url": "https://github.com/tusshr"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tusshr/atc.git"
+  },
+  "bugs": "https://github.com/tusshr/atc/issues",
+  "homepage": "https://github.com/tusshr/atc#readme",
+  "type": "module",
+  "bin": {
+    "atc": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "dev": "node src/cli.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check .",
+    "fix": "biome check --write .",
+    "test": "node --test test/*.test.ts",
+    "smoke": "npm run build && bash test/smoke.sh",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@clack/core": "^1.5.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "@types/node": "^22.20.5",
+    "husky": "^9.1.7",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,39 @@
+name: Bug report
+description: atc did something wrong or crashed
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you ran, what you expected, and what you got. Paste the full output.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: atc version
+      placeholder: "npx @tusshr/atc --version"
+    validations:
+      required: true
+  - type: dropdown
+    id: framework
+    attributes:
+      label: Framework
+      options: [Next.js, Astro, Hono, Express, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: pm
+    attributes:
+      label: Package manager
+      options: [npm, pnpm, yarn, bun]
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: "node --version"
+    validations:
+      required: true
